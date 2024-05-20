@@ -12,7 +12,7 @@ public class GuiModList extends GuiScreen {
     private GuiModListContainer modListContainer;
     private GuiSmallButton guiUpdateAll, guiConfigureMod;
     private boolean doSingleUpdate;
-    private GuiScreen guiScreen;
+    private Object guiScreen;
 
     public GuiModList(GuiScreen parent) {
         this.parent = parent;
@@ -55,14 +55,25 @@ public class GuiModList extends GuiScreen {
         } else if (var1.id == 2) {
             UpdateManager.getInstance().doUpdates();
         } else if (var1.id == 3) {
-            if (this.doSingleUpdate) {
-                UpdateManager.getInstance().doUpdates();
-            } else if (this.guiScreen != null) {
-                Minecraft.getInstance().displayGuiScreen(this.guiScreen);
+            if (this.guiScreen instanceof GuiConfigProvider) {
+                Minecraft.getInstance().displayGuiScreen(
+                        ((GuiConfigProvider) this.guiScreen).provideConfigScreen(this));
+            } else if (this.guiScreen instanceof GuiScreen) {
+                Minecraft.getInstance().displayGuiScreen((GuiScreen) this.guiScreen);
+            } else if (this.doSingleUpdate) {
+                UpdateManager.getInstance().doUpdate(
+                        this.modListContainer.getSelectedModContainer().id);
+            } else {
+                this.openModConfigScreen(this.modListContainer.getSelectedModContainer());
             }
         } else {
             this.modListContainer.actionPerformed(var1);
         }
+    }
+
+    // If somehow you have a better implementation, go ahead
+    private void openModConfigScreen(ModContainer modContainer) {
+        Minecraft.getInstance().displayGuiScreen(new GuiModConfig(this, modContainer));
     }
 
     public FontRenderer getFontRenderer() {
@@ -76,13 +87,16 @@ public class GuiModList extends GuiScreen {
         this.doSingleUpdate = false;
         this.guiScreen = null;
         this.guiConfigureMod.displayString = st.translateKey("mods.configureMod");
-        if (UpdateManager.getInstance().hasUpdate(modContainer.id)) {
+        if (modContainer.getConfigObject() instanceof GuiScreen ||
+                modContainer.getConfigObject() instanceof GuiConfigProvider) {
+            this.guiScreen = modContainer.getConfigObject();
+            this.guiConfigureMod.enabled = true;
+        } else if (modContainer.getConfigObject() != null) {
+            this.guiConfigureMod.enabled = true;
+        } else if (UpdateManager.getInstance().hasUpdate(modContainer.id)) {
             this.doSingleUpdate = true;
             this.guiConfigureMod.enabled = true;
             this.guiConfigureMod.displayString = st.translateKey("mods.updateMod");
-        } else if (modContainer.getConfigObject() instanceof GuiScreen) {
-            this.guiScreen = (GuiScreen) modContainer.getConfigObject();
-            this.guiConfigureMod.enabled = true;
         } else {
             this.guiConfigureMod.enabled = false;
         }

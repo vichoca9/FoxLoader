@@ -211,7 +211,7 @@ public class InstallerGUI implements FileDropHelper.FileDropHandler {
         }
     }
 
-    private boolean checkInstaller() {
+    private boolean checkInstaller(boolean checkExtStrict) {
         if (this.reIndevSource != null &&
                 !this.reIndevSource.exists()) {
             if (this.jFrame == null) return true;
@@ -226,7 +226,7 @@ public class InstallerGUI implements FileDropHelper.FileDropHandler {
             showMessage(TranslateEngine.getTranslation("installer.error.run-from-ide"), true);
             return true;
         }
-        if (!Main.currentInstallerFile.getName()
+        if (checkExtStrict && !Main.currentInstallerFile.getName()
                 .toLowerCase(Locale.ROOT).endsWith(".jar") &&
                 !this.installerPlatform.specialLauncher) {
             if (this.jFrame == null) return true;
@@ -239,7 +239,7 @@ public class InstallerGUI implements FileDropHelper.FileDropHandler {
     }
 
     public void installMineCraft() {
-        if (this.checkInstaller()) {
+        if (this.checkInstaller(false)) {
             return;
         }
         if (this.installerPlatform.specialLauncher) {
@@ -296,7 +296,7 @@ public class InstallerGUI implements FileDropHelper.FileDropHandler {
     }
 
     public void installBetaCraftEx(File betaCraft) {
-        if (this.checkInstaller()) {
+        if (this.checkInstaller(false)) {
             return;
         }
         File versions = new File(betaCraft, "versions");
@@ -357,7 +357,7 @@ public class InstallerGUI implements FileDropHelper.FileDropHandler {
                 printStream.println("addons:");
             }
             IOUtils.copyAndClose(InstallerGUI.class.getResourceAsStream(
-                    "/betacraft-" + BuildConfig.FOXLOADER_VERSION + ".jar"),
+                            "/betacraft-" + BuildConfig.FOXLOADER_VERSION + ".jar"),
                     Files.newOutputStream(foxLoaderBetaCraft.toPath()));
         } catch (IOException e) {
             showError(e);
@@ -370,7 +370,7 @@ public class InstallerGUI implements FileDropHelper.FileDropHandler {
     }
 
     public void extractMMCInstance() {
-        if (this.checkInstaller()) {
+        if (this.checkInstaller(true)) {
             return;
         }
 
@@ -407,7 +407,7 @@ public class InstallerGUI implements FileDropHelper.FileDropHandler {
     }
 
     public void extractServer() {
-        if (this.checkInstaller()) {
+        if (this.checkInstaller(true)) {
             return;
         }
 
@@ -445,7 +445,7 @@ public class InstallerGUI implements FileDropHelper.FileDropHandler {
     }
 
     public void doSilentInstall(String arg) throws IOException {
-        if (this.checkInstaller()) {
+        if (this.checkInstaller(false)) {
             return;
         }
         switch (this.launcherType) {
@@ -499,7 +499,7 @@ public class InstallerGUI implements FileDropHelper.FileDropHandler {
                 for (String entry : new String[]{ // Fix in place replace!
                         "patches/net.minecraft.json", "patches/net.minecraftforge.json"}) {
                     IOUtils.copyAndClose(InstallerGUI.class.getResourceAsStream(
-                            "/mmc/patches/com.fox2code.foxloader.json"),
+                                    "/mmc/patches/com.fox2code.foxloader.json"),
                             Files.newOutputStream(new File(entry).toPath()));
                 }
             }

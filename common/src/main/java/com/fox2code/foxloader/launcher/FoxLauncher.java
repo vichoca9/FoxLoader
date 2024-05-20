@@ -30,6 +30,13 @@ public class FoxLauncher {
                 Class.forName(cls);
             } catch (ClassNotFoundException ignored) {}
         }
+        // Some Linux-Tkg versions string can be unbearably long
+        // Let's shorten it a bit for F3 menu in that case
+        String osVersion = System.getProperty("os.version");
+        if (osVersion.endsWith("-generic_v3")) {
+            System.setProperty("os.version",
+                    osVersion.substring(0, osVersion.length() - 11));
+        }
     }
 
     public static final File foxLoaderFile = SourceUtil.getSourceFile(FoxLauncher.class);
@@ -99,6 +106,8 @@ public class FoxLauncher {
         foxClassLoader.addTransformerExclusion("org.spongepowered.asm.");
         foxClassLoader.addTransformerExclusion("org.spongepowered.tools.");
         foxClassLoader.addTransformerExclusion("com.llamalad7.mixinextras.");
+        foxClassLoader.addTransformerExclusion("com.bawnorton.mixinsquared.");
+        foxClassLoader.addTransformerExclusion("com.fox2code.jfallback.");
         foxClassLoader.addTransformerExclusion("com.fox2code.foxloader.loader.");
         installLoggerHelper(true); // Install special logger before libraries loading
         DependencyHelper.loadDependencies(true);
@@ -145,6 +154,8 @@ public class FoxLauncher {
         foxClassLoader.addTransformerExclusion("org.spongepowered.asm.");
         foxClassLoader.addTransformerExclusion("org.spongepowered.tools.");
         foxClassLoader.addTransformerExclusion("com.llamalad7.mixinextras.");
+        foxClassLoader.addTransformerExclusion("com.bawnorton.mixinsquared.");
+        foxClassLoader.addTransformerExclusion("com.fox2code.jfallback.");
         foxClassLoader.addTransformerExclusion("com.fox2code.foxloader.loader.");
         installLoggerHelper(false); // Install special logger before libraries loading
         DependencyHelper.loadDependencies(false);

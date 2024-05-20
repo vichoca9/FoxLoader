@@ -3,6 +3,7 @@ import java.security.MessageDigest
 
 plugins {
     id 'java-base'
+    id 'com.diffplug.eclipse.apt' version '3.44.0' apply false
 }
 
 group 'com.fox2code'
@@ -12,6 +13,7 @@ tasks.register('publishToMavenLocal', Task)
 
 subprojects {
     apply plugin: 'java-library'
+    apply plugin: 'com.diffplug.eclipse.apt'
 
     repositories {
         mavenCentral()
@@ -24,6 +26,19 @@ subprojects {
         }
         maven {
             url 'https://repo.spongepowered.org/maven'
+            content {
+                includeGroup "org.spongepowered"
+            }
+        }
+        maven {
+            name = 'Fabric'
+            url 'https://maven.fabricmc.net/'
+            content {
+                includeGroup "net.fabricmc"
+            }
+        }
+        maven {
+            url 'https://cdn.fox2code.com/maven'
         }
         maven {
             url 'https://jitpack.io/'
@@ -44,11 +59,19 @@ subprojects {
         withJavadocJar()
     }
 
+    // Support "@reason" javadoc Mixin tag mandated by Minecraft-Dev Intellij plugin
+    javadoc.options.tags = [ "reason" ]
+
     test {
         useJUnitPlatform()
     }
 
     afterEvaluate {
+        tasks.withType(JavaCompile.class).configureEach {
+            options.compilerArgs += '-g'
+            options.encoding = 'UTF-8'
+        }
+
         final String reindevVersion = project['reindev.version'] as String
         final String reindevVersionAllowFrom = project['reindev.version.allowFrom'] as String
 

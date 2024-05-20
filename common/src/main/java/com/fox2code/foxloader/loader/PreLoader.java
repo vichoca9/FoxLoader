@@ -3,14 +3,16 @@ package com.fox2code.foxloader.loader;
 import com.fox2code.foxloader.launcher.BuildConfig;
 import com.fox2code.foxloader.launcher.FoxClassLoader;
 import com.fox2code.foxloader.launcher.FoxLauncher;
-import com.fox2code.foxloader.launcher.utils.Platform;
 import com.fox2code.foxloader.launcher.utils.SourceUtil;
 import com.fox2code.foxloader.loader.rebuild.ClassDataProvider;
 import com.fox2code.foxloader.loader.transformer.*;
 import org.jetbrains.annotations.Nullable;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.commons.ClassRemapper;
+import org.objectweb.asm.commons.Remapper;
 import org.objectweb.asm.tree.ClassNode;
+import org.semver4j.Semver;
 
 import java.io.*;
 import java.net.MalformedURLException;
@@ -38,7 +40,6 @@ public class PreLoader {
             "FoxLoader-Transformer-Version: " + BuildConfig.FOXLOADER_TRANSFORMER_VERSION +
             "FoxLoader-ReIndev-Version: " + BuildConfig.REINDEV_VERSION +
             "Multi-Release: true\n").getBytes(StandardCharsets.UTF_8);
-    private static JvmCompatTransformer jvmCompatTransformer = null;
     private static final boolean devFoxLoader = FoxLauncher.foxLoaderFile.getAbsolutePath().replace('\\', '/')
             .endsWith("/common/build/libs/common-" + BuildConfig.FOXLOADER_VERSION + ".jar");
     private static final HashSet<File> preComputedFilesForHash = new HashSet<>();
@@ -67,12 +68,13 @@ public class PreLoader {
                 }
                 ClassReader classReader = new ClassReader(bytes);
                 ClassNode classNode = new ClassNode();
-                classReader.accept(classNode, 0);
+                classReader.accept(new ClassRemapper(classNode, SubstrateRemapper.INSTANCE), 0);
                 for (PreClassTransformer preClassTransformer : preTransformers) {
                     try {
                         preClassTransformer.transform(classNode, className);
                     } catch (RuntimeException e) {
-                        e.printStackTrace();
+                        ModLoader.foxLoader.logger.log(Level.SEVERE,
+                                "Failed to apply " + preClassTransformer.getClass().getName(), e);
                         throw e;
                     }
                 }
@@ -89,21 +91,32 @@ public class PreLoader {
             try {
                 preClassTransformer.transform(classNode, className);
             } catch (Exception e) {
-                e.printStackTrace();
+                ModLoader.foxLoader.logger.log(Level.WARNING,
+                        "Failed to apply " + preClassTransformer.getClass().getName(), e);
             }
         }
     }
 
     public static void patchForMixin(ClassNode classNode, String className) {
+        if (ignoreMinecraft && FoxClassLoader.isGameClassName(className)) return;
+        patch(classNode, className, false);
+    }
+
+    private static void patch(ClassNode classNode, String className, boolean rethrow) {
         for (PreClassTransformer preClassTransformer : preTransformers) {
             try {
                 preClassTransformer.transform(classNode, className);
             } catch (Exception e) {
-                e.printStackTrace();
+                ModLoader.getModLoaderLogger().log(rethrow ? Level.SEVERE : Level.WARNING,
+                        "Failed to apply " + preClassTransformer.getClass().getName(), e);
+                if (rethrow) {
+                    if (e instanceof RuntimeException) {
+                        throw (RuntimeException) e;
+                    } else {
+                        throw new RuntimeException(e.getMessage(), e);
+                    }
+                }
             }
-        }
-        if (jvmCompatTransformer != null) {
-            jvmCompatTransformer.transform(classNode, className);
         }
     }
 
@@ -120,6 +133,30 @@ public class PreLoader {
         coreMods.add(coreMod);
     }
 
+    private static void initializePrePatchReadme(File configFolder) {
+        File readme = new File(configFolder, "README.md");
+        if (!readme.exists()) {
+            try (PrintStream printStream = new PrintStream(readme)) {
+                printStream.println("# FoxLoader patched jar PatchedMinecraft(Client/Server).jar");
+                printStream.println("This file is the result of core-mods and mods pre-patchers");
+                printStream.println("As replacing this file may cause issues, FoxLoader doesn't allow it's replacement");
+                printStream.println();
+                printStream.println("If you think you absolutely need to change this file, you are wrong.");
+                printStream.println("You should put your jar-mods/core-mods in \"/coremods\" instead.");
+                printStream.println();
+                printStream.println("To do it, just download the vanilla server or client from ReIndev Discord server");
+                printStream.println("Change it's bytecode, then place it in \"/coremods\"");
+                printStream.println("Putting a full server jar in \"/coremods\" is officially supported.");
+                printStream.println();
+                printStream.println("Need help? Contact me on Discord: @fox2code");
+                printStream.println("ReIndev Discord: https://discord.gg/38Vfes6NpR");
+                printStream.flush();
+            } catch (FileNotFoundException e) {
+                ModLoader.getModLoaderLogger().log(Level.WARNING, "Failed to create README file!", e);
+            }
+        }
+    }
+
     static void initializePrePatch(boolean client) {
         prePatchInitialized = true;
         preLoadMetaJarHash.freeze();
@@ -130,6 +167,7 @@ public class PreLoader {
             ModLoader.foxLoader.logger.severe("Can't create FoxLoader config folder!");
             return;
         }
+        PreLoader.initializePrePatchReadme(configFolder);
         File jar = new File(configFolder, client ? "PatchedMinecraftClient.jar" : "PatchedMinecraftServer.jar");
         File hash = new File(configFolder, client ? "PatchedMinecraftClient.hash" : "PatchedMinecraftServer.hash");
         String jarSize = "";
@@ -139,6 +177,8 @@ public class PreLoader {
                         hash.toPath()), StandardCharsets.UTF_8);
                 jarSize = String.format("%08X", jar.length());
             } catch (Exception ignored) {}
+        } else if (hash.exists() && !hash.delete()) {
+            ModLoader.foxLoader.logger.severe("Failed to delete previous corrupted hash");
         }
         String expectedHashAndSize = currentHash + jarSize;
         ModLoader.foxLoader.logger.info("PreLoader hash: " + currentHash);
@@ -161,7 +201,7 @@ public class PreLoader {
             File sourceJar = new File(FoxLauncher.getFoxClassLoader()
                     .getMinecraftSource().toURI().getPath());
             ModLoader.foxLoader.logger.info("Source jar file: " + sourceJar.getAbsolutePath());
-            patchJar(sourceJar, jar, false);
+            patchJar(sourceJar, jar, false, false);
             jarSize = String.format("%08X", jar.length());
             Files.write(hash.toPath(), (currentHash + jarSize).getBytes(StandardCharsets.UTF_8));
             ModLoader.foxLoader.logger.info("Jar patched successfully, using that!");
@@ -169,23 +209,13 @@ public class PreLoader {
             if (!ModLoader.DEV_MODE) ignoreMinecraft = true;
         } catch (Exception e) {
             ModLoader.foxLoader.logger.log(Level.SEVERE, "Failed to patch jar file", e);
+            System.exit(-1); // Exit on failed jar patch
         }
     }
 
-    static void loadPrePatches(boolean client) {
+    static void loadPrePatches(boolean client, boolean forLiveGame) {
         preTransformers.clear();
-        if (FoxLauncher.getFoxClassLoader() != null) {
-            final int jvmVersion = Platform.getJvmVersion();
-            if (jvmVersion < 11) {
-                ModLoader.foxLoader.logger.info( // Tell the user we are doing that :3
-                        "Registering JvmCompatTransformer to run Java11 code on Java" + jvmVersion);
-                preTransformers.add(jvmCompatTransformer = new JvmCompatTransformer(jvmVersion));
-            } else {
-                ModLoader.foxLoader.logger.info( // Tell the user their jvm version
-                        "You are currently running on Java" + jvmVersion);
-                jvmCompatTransformer = null;
-            }
-        }
+        if (forLiveGame && ModLoader.DEV_MODE) return;
         registerPrePatch(new VarNameTransformer());
         registerPrePatch(new RegistryTransformer());
         registerPrePatch(new AsyncCapabilitiesTransformer());
@@ -194,6 +224,7 @@ public class PreLoader {
             registerPrePatch(new FrustrumHelperTransformer());
             registerPrePatch(new NetworkMappingTransformer());
             registerPrePatch(new ClientOnlyInventoryTransformer());
+            registerPrePatch(new DeApplet281Hotfix());
         } else {
             registerPrePatch(new ConsoleLogManagerTransformer());
         }
@@ -202,9 +233,9 @@ public class PreLoader {
     public static void patchReIndevForDev(File in, File out, boolean client) throws IOException {
         if (FoxLauncher.getFoxClassLoader() != null)
             throw new IllegalStateException("Not in development environment!");
-        loadPrePatches(client);
+        loadPrePatches(client, false);
         registerPrePatch(new DevelopmentModeTransformer());
-        patchJar(in, out, false);
+        patchJar(in, out, false, true);
     }
 
     public static void patchDevReIndevForSource(File in, File out) throws IOException {
@@ -212,10 +243,10 @@ public class PreLoader {
             throw new IllegalStateException("Not in development environment!");
         preTransformers.clear();
         registerPrePatch(new DevelopmentSourceTransformer());
-        patchJar(in, out, true);
+        patchJar(in, out, true, true);
     }
 
-    private static void patchJar(File in, File out, boolean ignoreFrames) throws IOException {
+    private static void patchJar(File in, File out, boolean ignoreFrames, boolean dev) throws IOException {
         LinkedHashMap<String, byte[]> hashMap = new LinkedHashMap<>();
         hashMap.put(metaInfPath, metaInf); // Set META-INF first
         final byte[] empty = new byte[0];
@@ -226,17 +257,18 @@ public class PreLoader {
         ArrayList<File> sources = new ArrayList<>(coreMods);
         sources.add(in);
         for (File source : sources) {
+            boolean forceComplete = dev && source == in;
             try (ZipInputStream zipInputStream = new ZipInputStream(
                     new BufferedInputStream(Files.newInputStream(source.toPath())))) {
                 while (null != (entry = zipInputStream.getNextEntry())) {
-                    if (!entry.isDirectory() &&
-                            !hashMap.containsKey(entry.getName())) {
+                    if ((FoxClassLoader.isGamePath(entry.getName()) || forceComplete) &&
+                            !entry.isDirectory() && !hashMap.containsKey(entry.getName())) {
                         baos.reset();
                         while ((nRead = zipInputStream.read(buffer, 0, buffer.length)) != -1) {
                             baos.write(buffer, 0, nRead);
                         }
-                        byte[] bytes = baos.toByteArray();
-                        if (bytes.length == 0) bytes = empty;
+                        byte[] bytes = baos.size() == 0 ?
+                                empty : baos.toByteArray();
                         hashMap.put(entry.getName(), bytes);
                     }
                 }
@@ -264,10 +296,10 @@ public class PreLoader {
                 ClassNode classNode = new ClassNode();
                 classReader.accept(classNode,
                         ignoreFrames ? ClassReader.SKIP_FRAMES : 0);
-                patchForMixin(classNode, entryName);
+                patch(classNode, entryName, true);
                 ClassWriter classWriter = ignoreFrames ?
                         new ClassWriter(ClassWriter.COMPUTE_MAXS) :
-                        classDataProviderOverride.newClassWriter();
+                        classDataProvider.newClassWriter();
                 classNode.accept(classWriter);
                 element.setValue(classWriter.toByteArray());
             }
@@ -395,7 +427,48 @@ public class PreLoader {
         }
     }
 
-    static JvmCompatTransformer getJvmCompatTransformer() {
-        return jvmCompatTransformer;
+    private static final class SubstrateRemapper extends Remapper {
+        public static final SubstrateRemapper INSTANCE = new SubstrateRemapper();
+        private static final String ASM_PREFIX = "META-INF/substrate/";
+        private static final int ASM_PREFIX_LENGTH = ASM_PREFIX.length();
+        private static final Semver FOX_LOADER_SEMVER = Semver.coerce(BuildConfig.FOXLOADER_VERSION);
+
+        private final HashMap<String, Boolean> redirectPrefixCache = new HashMap<>();
+
+        private SubstrateRemapper() {
+            this.redirectPrefixCache.put("shims", Boolean.FALSE);
+        }
+
+        @Override
+        public String map(String internalName) {
+            if (!internalName.startsWith(ASM_PREFIX))
+                return internalName;
+            int sub;
+            String type = internalName.substring(ASM_PREFIX_LENGTH,
+                    sub = internalName.indexOf('/', ASM_PREFIX_LENGTH));
+            Boolean b = redirectPrefixCache.get(type);
+            if (b == null) {
+                b = Boolean.FALSE;
+                try {
+                    if (type.startsWith("foxloader-")) {
+                        b = FOX_LOADER_SEMVER.isGreaterThanOrEqualTo(type.substring(10));
+                    } else {
+                        int i = type.indexOf('-');
+                        if (i != -1) {
+                            ModContainer modContainer = ModLoader.getModContainer(type.substring(0, i));
+                            if (modContainer != null && modContainer.semver
+                                    .isGreaterThanOrEqualTo(type.substring(i + 1))) {
+                                b = Boolean.TRUE;
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    ModLoader.getModLoaderLogger().log(Level.WARNING,
+                            "Failed to compute substrate statement " + type, e);
+                }
+                redirectPrefixCache.put(type, b);
+            }
+            return b ? this.map(internalName.substring(sub + 1)) : internalName;
+        }
     }
 }

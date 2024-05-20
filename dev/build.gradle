@@ -2,11 +2,13 @@
 plugins {
     id 'groovy'
     id 'maven-publish'
+    // https://github.com/gradle-plugins/toolbox
+    id("dev.gradleplugins.java-gradle-plugin") version("1.6.11")
 }
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(11)
+        languageVersion = JavaLanguageVersion.of(8)
     }
 }
 
@@ -16,16 +18,17 @@ version project['foxloader.version']
 configurations {
     include
     compileOnly.extendsFrom(include)
+    includeOnly.extendsFrom(include)
 }
 
 dependencies {
-    compileOnly gradleApi()
-    compileOnly localGroovy()
-    api 'org.vineflower:vineflower:1.9.3'
+    //compileOnly gradleApi()
+    //compileOnly localGroovy()
+    api 'com.fox2code:JFallback:0.1.1'
     api 'com.google.code.gson:gson:2.10.1'
     api 'org.semver4j:semver4j:5.2.2'
-    api 'org.ow2.asm:asm-commons:9.6'
-    api 'org.ow2.asm:asm-util:9.6'
+    api 'org.ow2.asm:asm-commons:9.7'
+    api 'org.ow2.asm:asm-util:9.7'
     // Need LWJGL 2 for game decompilation.
     api('org.lwjgl.lwjgl:lwjgl:2.9.3') {
         transitive = false
@@ -33,13 +36,35 @@ dependencies {
     include(project(":common")) {
         transitive = false
     }
+    includeOnly(project(":dev11")) {
+        transitive = false
+    }
+    // For testes only
+    testImplementation(gradleTestKit())
+    testImplementation(gradleFixtures()) { transitive = false }
+    testRuntimeOnly(project(":common"))
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.7.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+gradlePlugin {
+    compatibility {
+        minimumGradleVersion = '8.2'
+        gradleApiVersion = '8.6'
+    }
+}
+
+test {
+    useJUnitPlatform()
 }
 
 jar.dependsOn(":common:jar")
+jar.dependsOn(":dev11:jar")
 
 afterEvaluate {
     jar {
-        from(configurations.include.collect { it.isDirectory() ? it : zipTree(it) }) {
+        from(configurations.includeOnly.collect { it.isDirectory() ? it : zipTree(it) }) {
             exclude("module-info.class")
         }
     }

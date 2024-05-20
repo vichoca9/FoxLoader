@@ -16,6 +16,7 @@ import org.gradle.api.component.SoftwareComponent
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.jvm.tasks.Jar
 import org.gradle.internal.os.OperatingSystem
 
@@ -29,7 +30,9 @@ import java.text.Normalizer
 import java.util.jar.JarFile
 
 class GradlePlugin implements Plugin<Project> {
-    private static final Gson gson = new GsonBuilder().setPrettyPrinting().create();
+    private static FoxLoaderDecompilerHelper decompilerHelper
+    private static final Gson gson = new GsonBuilder().setPrettyPrinting().create()
+    private static final Object decompileLock = new Object()
     private File foxLoaderCache
     private File foxLoaderData
 
@@ -42,7 +45,6 @@ class GradlePlugin implements Plugin<Project> {
         project.apply([plugin: 'maven-publish'])
         project.apply([plugin: 'eclipse'])
         project.apply([plugin: 'idea'])
-        project.compileJava.options.encoding = 'UTF-8'
         project.eclipse.classpath.downloadSources = true
         project.idea.module.downloadSources = true
         project.repositories {
@@ -59,6 +61,19 @@ class GradlePlugin implements Plugin<Project> {
             }
             maven {
                 url 'https://repo.spongepowered.org/maven'
+                content {
+                    includeGroup "org.spongepowered"
+                }
+            }
+            maven {
+                name = 'Fabric'
+                url 'https://maven.fabricmc.net/'
+                content {
+                    includeGroup "net.fabricmc"
+                }
+            }
+            maven {
+                url 'https://cdn.fox2code.com/maven'
             }
             maven {
                 url 'https://jitpack.io/'
@@ -71,6 +86,8 @@ class GradlePlugin implements Plugin<Project> {
 
             withSourcesJar()
         }
+        // Support "@reason" javadoc Mixin tag mandated by Minecraft-Dev Intellij plugin
+        project.javadoc.options.tags = [ "reason" ]
         project.sourceSets {
             main
             client {
@@ -85,11 +102,11 @@ class GradlePlugin implements Plugin<Project> {
         project.tasks.register("runClient", JavaExec) {
             group = "FoxLoader"
             description = "Run ReIndev client from gradle"
-        }.get().dependsOn(project.getTasks().getByName("jar"))
+        }.get().dependsOn(project.getTasks().getByName("assemble"))
         project.tasks.register("runServer", JavaExec) {
             group = "FoxLoader"
             description = "Run ReIndev server from gradle"
-        }.get().dependsOn(project.getTasks().getByName("jar"))
+        }.get().dependsOn(project.getTasks().getByName("assemble"))
         JsonObject foxLoaderJsonData = readData()
         project.tasks.register("changeDefaultUsername", Task) {
             group = "FoxLoader"
@@ -124,15 +141,26 @@ class GradlePlugin implements Plugin<Project> {
             }
         }
         project.afterEvaluate {
+            project.tasks.withType(JavaCompile.class).configureEach {
+                options.compilerArgs += '-g'
+                options.encoding = 'UTF-8'
+            }
             FoxLoaderConfig config = ((FoxLoaderConfig) project.extensions.getByName("foxloader"))
+            if (config.decompileSources && decompilerHelper == null) {
+                decompilerHelper = new FoxLoaderDecompilerHelper()
+            }
             project.tasks.jar {
                 from(project.sourceSets.client.output)
                 from(project.sourceSets.server.output)
             }
             for (DependencyHelper.Dependency dependency : DependencyHelper.commonDependencies) {
+                if (dependency == DependencyHelper.jFallback) continue
                 project.dependencies {
                     implementation(dependency.name)
                 }
+            }
+            project.configurations.all {
+                exclude group: 'org.spongepowered', module: 'mixin'
             }
             process(project, foxLoaderCache, config)
             String foxLoaderVersion = config.localTesting ?
@@ -225,11 +253,15 @@ class GradlePlugin implements Plugin<Project> {
                 if (config.preClassTransformer != null) {
                     attributes 'PreClassTransformer': config.preClassTransformer
                 }
+                if (config.loadingPlugin != null) {
+                    attributes 'LoadingPlugin': config.loadingPlugin
+                }
                 if (config.unofficial) {
                     attributes 'Unofficial': 'true'
                 }
             }
-            File mod = ((Jar) project.getTasks().getByName("jar")).getArchiveFile().get().getAsFile()
+            Jar jarTask = ((Jar) project.getTasks().getByName("jar"))
+            File mod = jarTask.getArchiveFile().get().getAsFile()
             JsonElement savedUsername = foxLoaderJsonData.get("username")
             String username = config.username
             if (savedUsername != null) {
@@ -359,14 +391,32 @@ class GradlePlugin implements Plugin<Project> {
             System.out.println("Patching ReIndev " + logSideName)
             PreLoader.patchReIndevForDev(jar, jarFox, client)
         }
-        if (config.decompileSources) {
-            File unpickedJarFox = new File(foxLoaderCache,
-                    "net/silveros/" + sideName + "/" + versionFox + "/" +
-                            sideName + "-" + versionFox + "-unpicked.jar")
-            File sourcesJarFox = new File(foxLoaderCache,
-                    "net/silveros/" + sideName + "/" + versionFox + "/" +
-                            sideName + "-" + versionFox + "-sources.jar")
-            if (config.forceReload && sourcesJarFox.exists()) sourcesJarFox.delete()
+        if (config.decompileSources && decompilerHelper != null) {
+            decompileSide(foxLoaderCache, config, client, versionFox, jarFox)
+        }
+        if (client) {
+            project.dependencies {
+                clientImplementation("net.silveros:" + sideName + ":${versionFox}")
+            }
+        } else {
+            project.dependencies {
+                serverImplementation("net.silveros:" + sideName + ":${versionFox}")
+            }
+        }
+    }
+
+    private static void decompileSide(File foxLoaderCache, FoxLoaderConfig config, boolean client,
+                                      String versionFox, File jarFox) {
+        final String sideName = client ? "reindev" : "reindev-server"
+        final String logSideName = client ? "client" : "server"
+        File unpickedJarFox = new File(foxLoaderCache,
+                "net/silveros/" + sideName + "/" + versionFox + "/" +
+                        sideName + "-" + versionFox + "-unpicked.jar")
+        File sourcesJarFox = new File(foxLoaderCache,
+                "net/silveros/" + sideName + "/" + versionFox + "/" +
+                        sideName + "-" + versionFox + "-sources.jar")
+        if (config.forceReload && sourcesJarFox.exists()) sourcesJarFox.delete()
+        synchronized (decompileLock) {
             if (!jarFileExists(sourcesJarFox)) {
                 closeJarFileSystem(unpickedJarFox)
                 if (unpickedJarFox.exists()) unpickedJarFox.delete()
@@ -374,28 +424,7 @@ class GradlePlugin implements Plugin<Project> {
                 PreLoader.patchDevReIndevForSource(jarFox, unpickedJarFox)
                 try {
                     System.out.println("Decompiling patched ReIndev " + logSideName)
-                    new FoxLoaderDecompiler(unpickedJarFox, sourcesJarFox, client).decompile()
-                } catch (OutOfMemoryError oom) {
-                    boolean deleteFailed = false
-                    try {
-                        closeJarFileSystem(unpickedJarFox)
-                        closeJarFileSystem(sourcesJarFox)
-                    } finally {
-                        if (!sourcesJarFox.delete()) {
-                            sourcesJarFox.deleteOnExit()
-                            deleteFailed = true
-                        }
-                    }
-                    Throwable root = oom
-                    while (root.getCause() != null)
-                        root = root.getCause()
-
-                    root.initCause(deleteFailed ? // If delete failed, restart
-                            UserMessage.UNRECOVERABLE_STATE_DECOMPILE :
-                            client ? UserMessage.FAIL_DECOMPILE_CLIENT :
-                                    UserMessage.FAIL_DECOMPILE_SERVER)
-                    if (deleteFailed) throw oom // If delete failed, we can't recover
-                    oom.printStackTrace()
+                    decompilerHelper.decompile(unpickedJarFox, sourcesJarFox, client)
                 } catch (Throwable throwable) {
                     boolean deleteFailed = false
                     try {
@@ -420,23 +449,25 @@ class GradlePlugin implements Plugin<Project> {
                                     UserMessage.FAIL_DECOMPILE_SERVER)
                     if (deleteFailed) {
                         terminateProcess()
+                        throw throwable
                     }
-                    throw throwable
+                    if (throwable instanceof OutOfMemoryError ||
+                            throwable instanceof RuntimeException) {
+                        throwable.printStackTrace()
+                    } else throw throwable
                 }
-            }
-        }
-        if (client) {
-            project.dependencies {
-                clientImplementation("net.silveros:" + sideName + ":${versionFox}")
-            }
-        } else {
-            project.dependencies {
-                serverImplementation("net.silveros:" + sideName + ":${versionFox}")
+                // Close not critical there, as if close fails here, it's still not a big issue
+                closeJarFileSystem(unpickedJarFox, false)
+                closeJarFileSystem(sourcesJarFox, false)
             }
         }
     }
 
     static void closeJarFileSystem(File file) {
+        closeJarFileSystem(file, true)
+    }
+
+    static void closeJarFileSystem(File file, boolean critical) {
         URI uri = new URI("jar:file", null, file.toURI().getPath(), null)
         FileSystem fileSystem = null
         try {
@@ -447,13 +478,15 @@ class GradlePlugin implements Plugin<Project> {
             try {
                 Files.exists(fileSystem.getPath("META-INF/MANIFEST.MF"))
             } catch (ClosedFileSystemException e) {
-                terminateProcess()
-                Throwable root = e
-                while (root.getCause() != null) root = root.getCause()
-                if (!(root instanceof UserMessage)) {
-                    root.initCause(UserMessage.UNRECOVERABLE_STATE_DECOMPILE)
+                if (critical) {
+                    terminateProcess()
+                    Throwable root = e
+                    while (root.getCause() != null) root = root.getCause()
+                    if (!(root instanceof UserMessage)) {
+                        root.initCause(UserMessage.UNRECOVERABLE_STATE_DECOMPILE)
+                    }
+                    throw e
                 }
-                throw e
             }
         }
     }
@@ -530,7 +563,8 @@ class GradlePlugin implements Plugin<Project> {
         public String modDesc
         public String modWebsite
         public String preClassTransformer
-        // Fox testing only
+        public String loadingPlugin
+        // For testing only
         public String foxLoaderLibVersionOverride
         public boolean localTesting = false
         public boolean forceReload = false

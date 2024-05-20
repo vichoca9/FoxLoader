@@ -4,6 +4,7 @@ import com.fox2code.foxloader.launcher.FoxLauncher;
 import com.fox2code.foxloader.loader.ClientModLoader;
 import com.fox2code.foxloader.loader.ModLoader;
 import com.fox2code.foxloader.network.NetworkPlayer;
+import com.fox2code.foxloader.network.SidedMetadataAPI;
 import net.minecraft.client.Minecraft;
 import net.minecraft.src.client.GameSettings;
 import net.minecraft.src.game.entity.player.EntityPlayer;
@@ -33,8 +34,8 @@ public class MixinMinecraft {
     @Unique private boolean closeGameDelayed;
     @Unique private boolean showDebugInfoPrevious;
 
-    @Inject(method = "run", at = @At("HEAD"))
-    public void onRun(CallbackInfo ci) {
+    @Inject(method = "startGame", at = @At("HEAD"))
+    public void onStartGame(CallbackInfo ci) {
         ClientModLoader.Internal.notifyRun();
     }
 
@@ -57,6 +58,9 @@ public class MixinMinecraft {
                     this.loadedWorldType = world.multiplayerWorld ?
                             NetworkPlayer.ConnectionType.CLIENT_ONLY :
                             NetworkPlayer.ConnectionType.SINGLE_PLAYER);
+            if (!world.multiplayerWorld) {
+                SidedMetadataAPI.Internal.setActiveMetaData(null);
+            }
         }
     }
 
